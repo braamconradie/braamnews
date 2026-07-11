@@ -1,0 +1,96 @@
+# Daily briefing configuration.
+# Sections are emailed in the order listed here.
+# type: news        -> Google News RSS search across `queries`
+# type: markets      -> live crypto/stock/FX data (handled in lib/fetch_markets.py)
+# type: reflection   -> a short AI-written reflection, optionally grounded in `queries` news
+
+sections:
+  - id: nz_energy_market
+    title: "NZ Energy Market"
+    type: news
+    focus: >
+      Electricity Authority, Commerce Commission, and MBIE announcements or
+      policy/regulatory changes affecting gentailers; competitor moves by
+      Meridian, Contact, Genesis, Manawa, and Nova (retail pricing, tariffs,
+      DER/flexibility); wholesale market events such as price spikes, hydro
+      storage levels, or major outages.
+    queries:
+      - "Electricity Authority New Zealand"
+      - "Commerce Commission electricity New Zealand"
+      - "MBIE energy policy New Zealand"
+      - "Meridian Energy"
+      - "Contact Energy NZ"
+      - "Genesis Energy NZ"
+      - "Manawa Energy"
+      - "Nova Energy New Zealand"
+      - "New Zealand wholesale electricity price"
+      - "New Zealand hydro lake storage"
+
+  - id: platform_billing_tech
+    title: "Platform & Billing Tech"
+    type: news
+    focus: >
+      Kraken Technologies / Octopus Energy licensing deals and client wins or
+      losses, converged energy+telco billing proof points; Gentrack and
+      Salesforce Energy & Utilities product or client news; Kaluza and other
+      CIS platform news.
+    queries:
+      - "Kraken Technologies Octopus Energy"
+      - "Octopus Energy licensing deal"
+      - "Gentrack"
+      - "Salesforce Energy and Utilities"
+      - "Kaluza energy platform"
+
+  - id: telco_convergence
+    title: "Telco Convergence"
+    type: news
+    focus: >
+      One NZ, Spark, and 2degrees: bundling, energy crossover, and broadband
+      market shifts.
+    queries:
+      - "One NZ telecommunications"
+      - "Spark New Zealand"
+      - "2degrees New Zealand"
+
+  - id: ai_tooling
+    title: "AI & Tooling"
+    type: news
+    focus: >
+      Anthropic/Claude releases, agentic tooling, and enterprise AI adoption
+      in utilities.
+    queries:
+      - "Anthropic Claude"
+      - "agentic AI enterprise"
+      - "AI utilities energy sector"
+
+  - id: markets_crypto
+    title: "Markets & Crypto"
+    type: markets
+    focus: >
+      BTC and ETH overnight moves with a one-line driver; MSTR and BMNR price
+      plus material news (preferred dividends, treasury actions, dilution);
+      NZD/USD only if it moved more than 0.5%.
+    crypto:
+      - BTC
+      - ETH
+    stocks:
+      - MSTR
+      - BMNR
+    fx:
+      pair: "NZDUSD=X"
+      label: "NZD/USD"
+      min_move_pct: 0.5
+    queries:
+      - "MicroStrategy Bitcoin treasury"
+      - "BMNR Bitmine Immersion"
+
+  - id: consciousness
+    title: "Consciousness"
+    type: reflection
+    focus: >
+      A short, original, inspirational reflection on consciousness -
+      grounded in any genuinely relevant recent research or writing if
+      available, otherwise a standalone reflection.
+    queries:
+      - "consciousness research"
+      - "neuroscience of consciousness"
