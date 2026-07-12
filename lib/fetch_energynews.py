@@ -14,12 +14,68 @@ what the site returned and we can tune selectors from there.
 import logging
 import os
 import re
+from datetime import datetime, timedelta, timezone
 from urllib.parse import urljoin
 
 import requests
 from bs4 import BeautifulSoup
 
 logger = logging.getLogger(__name__)
+
+# Only include articles published within this many days (configurable).
+MAX_AGE_DAYS = int(os.environ.get("ENERGYNEWS_MAX_AGE_DAYS", "7"))
+
+_MONTHS = {m.lower(): i for i, m in enumerate(
+    ["", "January", "February", "March", "April", "May", "June", "July",
+     "August", "September", "October", "November", "December"])}
+_MONTHS.update({m[:3]: i for m, i in list(_MONTHS.items()) if m})
+
+
+def _parse_date(text: str) -> datetime | None:
+    """Best-effort parse of the first date found in `text` (UTC, day-granularity)."""
+    if not text:
+        return None
+    # ISO first: 2026-07-12 (also matches the date part of an ISO datetime like
+    # 2026-07-12T09:30:00+12:00 — no trailing \b, which would fail before "T").
+    m = re.search(r"\b(\d{4})-(\d{2})-(\d{2})(?!\d)", text)
+    if m:
+        try:
+            return datetime(int(m[1]), int(m[2]), int(m[3]), tzinfo=timezone.utc)
+        except ValueError:
+            pass
+    # "12 July 2026" / "12 Jul 2026"
+    m = re.search(r"\b(\d{1,2})\s+([A-Za-z]{3,9})\s+(\d{4})\b", text)
+    if m and m[2].lower() in _MONTHS:
+        try:
+            return datetime(int(m[3]), _MONTHS[m[2].lower()], int(m[1]), tzinfo=timezone.utc)
+        except ValueError:
+            pass
+    # NZ day-first numeric: 12/07/2026 or 12-07-2026
+    m = re.search(r"\b(\d{1,2})[/-](\d{1,2})[/-](\d{4})\b", text)
+    if m:
+        try:
+            return datetime(int(m[3]), int(m[2]), int(m[1]), tzinfo=timezone.utc)
+        except ValueError:
+            pass
+    return None
+
+
+def _article_date(anchor) -> datetime | None:
+    """Look for a publish date on/near an article link: <time datetime> or nearby text."""
+    node = anchor
+    for _ in range(4):  # walk up a few ancestors looking for date context
+        if node is None:
+            break
+        time_tag = node.find("time") if hasattr(node, "find") else None
+        if time_tag is not None:
+            dt = _parse_date(time_tag.get("datetime", "")) or _parse_date(time_tag.get_text(" "))
+            if dt:
+                return dt
+        dt = _parse_date(node.get_text(" ")) if hasattr(node, "get_text") else None
+        if dt:
+            return dt
+        node = getattr(node, "parent", None)
+    return None
 
 BASE_URL = os.environ.get("ENERGYNEWS_BASE_URL", "https://www.energynews.co.nz").rstrip("/")
 LOGIN_URL = os.environ.get("ENERGYNEWS_LOGIN_URL", f"{BASE_URL}/user/login")
@@ -98,9 +154,12 @@ def _extract_articles(session: requests.Session, keywords: list[str],
     logger.info("EnergyNews: listing %s returned %d anchors", LISTING_URL, len(anchors))
 
     lowered_keywords = [k.lower() for k in (keywords or [])]
+    cutoff = datetime.now(timezone.utc) - timedelta(days=MAX_AGE_DAYS)
     keyword_hits: list[dict] = []
     recent: list[dict] = []
     seen: set[str] = set()
+    dropped_old = 0
+    undated = 0
 
     for a in anchors:
         title = a.get_text(strip=True)
@@ -113,6 +172,16 @@ def _extract_articles(session: requests.Session, keywords: list[str],
             continue
         seen.add(url)
 
+        # Date filter: drop anything older than the window. Fail open — if no
+        # date is detectable on the listing, keep the item (and count it, so the
+        # log tells us whether date parsing is working).
+        published = _article_date(a)
+        if published is not None and published < cutoff:
+            dropped_old += 1
+            continue
+        if published is None:
+            undated += 1
+
         item = {"title": title, "link": url, "source": "EnergyNews"}
         if lowered_keywords and any(k in title.lower() for k in lowered_keywords):
             keyword_hits.append(item)
@@ -122,8 +191,10 @@ def _extract_articles(session: requests.Session, keywords: list[str],
     # Keyword matches first (the focus topics), then fill with other recent items
     # so Claude still sees context; Claude filters to the section focus.
     ordered = keyword_hits + recent
-    logger.info("EnergyNews: %d headline candidates (%d keyword-matched)",
-                len(ordered), len(keyword_hits))
+    logger.info(
+        "EnergyNews: %d candidates within %dd (%d keyword-matched, %d undated kept, "
+        "%d dropped as older than window)",
+        len(ordered), MAX_AGE_DAYS, len(keyword_hits), undated, dropped_old)
     return ordered[:max_items]
 
 
