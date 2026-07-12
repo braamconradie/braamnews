@@ -109,12 +109,18 @@ def summarize_briefing(sections_config: list[dict], raw_data: dict, api_key: str
 
     response = client.messages.create(
         model=model,
-        max_tokens=4096,
+        max_tokens=16000,
         system=SYSTEM_PROMPT,
         messages=[{"role": "user", "content": prompt}],
     )
 
     text = "".join(block.text for block in response.content if block.type == "text")
+
+    if response.stop_reason == "max_tokens":
+        logger.error(
+            "Claude response hit the max_tokens limit and was truncated; the JSON "
+            "will be incomplete. Raise max_tokens or trim the number of items."
+        )
 
     try:
         return _extract_json(text)
