@@ -63,27 +63,6 @@ sections:
       - "agentic AI enterprise"
       - "AI utilities energy sector"
 
-  - id: markets_crypto
-    title: "Markets & Crypto"
-    type: markets
-    focus: >
-      BTC and ETH overnight moves with a one-line driver; MSTR and BMNR price
-      plus material news (preferred dividends, treasury actions, dilution);
-      NZD/USD only if it moved more than 0.5%.
-    crypto:
-      - BTC
-      - ETH
-    stocks:
-      - MSTR
-      - BMNR
-    fx:
-      pair: "NZDUSD=X"
-      label: "NZD/USD"
-      min_move_pct: 0.5
-    queries:
-      - "MicroStrategy Bitcoin treasury"
-      - "BMNR Bitmine Immersion"
-
   - id: consciousness
     title: "Consciousness"
     type: reflection
