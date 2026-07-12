@@ -26,6 +26,30 @@ sections:
       - "New Zealand wholesale electricity price"
       - "New Zealand hydro lake storage"
 
+  - id: energy_retail_der
+    title: "Energy Retail & DER (EnergyNews)"
+    type: energynews
+    focus: >
+      Subscriber reporting from EnergyNews, focused specifically on energy
+      retailers, virtual power plants (VPP), distributed energy resources
+      (DER), and retail electricity market changes (pricing, tariffs, new
+      entrants, churn, regulation). Ignore items outside this retail/DER
+      focus even if they appear in the supplied headlines.
+    keywords:
+      - retailer
+      - retail
+      - VPP
+      - virtual power plant
+      - DER
+      - distributed energy
+      - flexibility
+      - demand response
+      - solar
+      - battery
+      - tariff
+      - plan
+      - churn
+
   - id: platform_billing_tech
     title: "Platform & Billing Tech"
     type: news

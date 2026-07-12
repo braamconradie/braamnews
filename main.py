@@ -11,6 +11,7 @@ from zoneinfo import ZoneInfo
 import yaml
 
 from lib.email_sender import render_html, send_email
+from lib.fetch_energynews import fetch_energynews
 from lib.fetch_markets import fetch_crypto, fetch_fx, fetch_stocks
 from lib.fetch_news import fetch_section_news
 from lib.summarize import summarize_briefing
@@ -35,7 +36,10 @@ def gather_raw_data(sections_config: list[dict]) -> dict:
         section_id = section["id"]
         section_type = section["type"]
 
-        if section_type == "markets":
+        if section_type == "energynews":
+            items = fetch_energynews(section.get("keywords", []))
+            raw_data[section_id] = {"items": items}
+        elif section_type == "markets":
             crypto = fetch_crypto(section.get("crypto", []))
             stocks = fetch_stocks(section.get("stocks", []))
             fx_config = section.get("fx", {})
