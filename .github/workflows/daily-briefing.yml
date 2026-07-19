@@ -30,6 +30,8 @@ jobs:
           GMAIL_ADDRESS: ${{ secrets.GMAIL_ADDRESS }}
           GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
           RECIPIENT_EMAIL: ${{ secrets.RECIPIENT_EMAIL }}
-          ENERGYNEWS_USERNAME: ${{ secrets.ENERGYNEWS_USERNAME }}
+          # Read the username from a Secret or a Variable (whichever is set) —
+          # a username is commonly added under the Variables tab by mistake.
+          ENERGYNEWS_USERNAME: ${{ secrets.ENERGYNEWS_USERNAME || vars.ENERGYNEWS_USERNAME }}
           ENERGYNEWS_PASSWORD: ${{ secrets.ENERGYNEWS_PASSWORD }}
         run: python main.py
