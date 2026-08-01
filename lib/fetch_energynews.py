@@ -116,6 +116,32 @@ def _click_first(page, selectors: list[str]) -> bool:
     return False
 
 
+def _submit_login(page) -> bool:
+    """Submit the login form. Pressing Enter in the password field is the most
+    reliable trigger for JS/React forms; fall back to clicking the button."""
+    for sel in _PASSWORD_SELECTORS:
+        try:
+            loc = page.locator(sel).first
+            if loc.count() > 0:
+                loc.press("Enter")
+                logger.info("EnergyNews: submitted via Enter (%s)", sel)
+                page.wait_for_timeout(3000)
+                if "/user/login" not in page.url:
+                    return True
+                break
+        except Exception:
+            continue
+    try:
+        btn = page.get_by_role("button", name=re.compile("log ?in", re.I)).first
+        if btn.count() > 0:
+            btn.click(timeout=8000)
+            logger.info("EnergyNews: clicked Login button (role)")
+            return True
+    except Exception:
+        pass
+    return _click_first(page, _SUBMIT_SELECTORS)
+
+
 def _looks_logged_in(page) -> bool:
     if "/user/login" in page.url:
         return False
@@ -205,7 +231,7 @@ def fetch_energynews(keywords: list[str] | None = None, max_items: int = 10) -> 
                 logger.warning("EnergyNews: could not locate login fields "
                                "(user=%s pass=%s).", got_user, got_pass)
 
-            _click_first(page, _SUBMIT_SELECTORS)
+            _submit_login(page)
             try:
                 page.wait_for_load_state("networkidle", timeout=NAV_TIMEOUT_MS)
             except Exception:
