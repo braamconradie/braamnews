@@ -149,6 +149,34 @@ def _looks_logged_in(page) -> bool:
     return ("log out" in body) or ("logout" in body) or ("sign out" in body)
 
 
+def _diagnose_failure(page) -> None:
+    """Log *why* login failed so it's visible in the run log (no screenshot needed)."""
+    try:
+        content = page.content().lower()
+    except Exception:
+        content = ""
+    for marker in ("recaptcha", "hcaptcha", "g-recaptcha", "cloudflare",
+                   "verify you are human", "are you human", "captcha"):
+        if marker in content:
+            logger.warning("EnergyNews: possible CAPTCHA/bot challenge on the page "
+                           "(matched %r) — automated login may not be feasible.", marker)
+            return
+    for sel in (".messages--error", ".messages.error", "[role='alert']",
+                ".alert-danger", ".form-item--error-message", ".region-messages"):
+        try:
+            loc = page.locator(sel)
+            for i in range(min(loc.count(), 3)):
+                txt = loc.nth(i).inner_text(timeout=2000).strip()
+                if txt:
+                    logger.warning("EnergyNews: on-page message after submit: %s",
+                                   " ".join(txt.split())[:300])
+                    return
+        except Exception:
+            continue
+    logger.info("EnergyNews: no explicit error message or CAPTCHA found after submit "
+                "(form may have silently rejected the credentials).")
+
+
 def _extract_articles(html: str, keywords: list[str], max_items: int) -> list[dict]:
     soup = BeautifulSoup(html, "html.parser")
     anchors = soup.find_all("a", href=True)
@@ -241,9 +269,8 @@ def fetch_energynews(keywords: list[str] | None = None, max_items: int = 10) -> 
             if _looks_logged_in(page):
                 logger.info("EnergyNews: login succeeded (url=%s).", page.url)
             else:
-                logger.warning("EnergyNews: login NOT confirmed — still at %s. "
-                               "Check credentials or for a CAPTCHA/bot challenge "
-                               "(see debug screenshots).", page.url)
+                logger.warning("EnergyNews: login NOT confirmed — still at %s.", page.url)
+                _diagnose_failure(page)
 
             page.goto(LISTING_URL, wait_until="networkidle", timeout=NAV_TIMEOUT_MS)
             _shot(page, "03_listing.png")
