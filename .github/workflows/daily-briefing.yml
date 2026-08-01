@@ -30,8 +30,9 @@ jobs:
           GMAIL_ADDRESS: ${{ secrets.GMAIL_ADDRESS }}
           GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
           RECIPIENT_EMAIL: ${{ secrets.RECIPIENT_EMAIL }}
-          # Read the username from a Secret or a Variable (whichever is set) —
-          # a username is commonly added under the Variables tab by mistake.
-          ENERGYNEWS_USERNAME: ${{ secrets.ENERGYNEWS_USERNAME || vars.ENERGYNEWS_USERNAME }}
+          # Accept the username under any of the common names/locations it may
+          # have been saved as (secret or variable), so a naming mismatch does
+          # not silently skip the EnergyNews section.
+          ENERGYNEWS_USERNAME: ${{ secrets.ENERGYNEWS_USERNAME || secrets.ENERGY_NEWS_LOGIN || vars.ENERGYNEWS_USERNAME || vars.ENERGY_NEWS_LOGIN }}
           ENERGYNEWS_PASSWORD: ${{ secrets.ENERGYNEWS_PASSWORD }}
         run: python main.py
