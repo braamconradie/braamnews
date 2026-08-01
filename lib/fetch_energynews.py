@@ -1,14 +1,15 @@
-"""Fetch subscriber articles from EnergyNews (energynews.co.nz), a Drupal site.
+"""Fetch subscriber articles from EnergyNews (energynews.co.nz) via a real browser.
 
-Logs in with a normal authenticated requests session (Drupal's standard
-`user_login_form`), then pulls recent article headlines from a listing page.
-Credentials come from the ENERGYNEWS_USERNAME / ENERGYNEWS_PASSWORD env vars
-(GitHub secrets) — never hard-coded.
+The site's login is JavaScript-driven (React server actions), so a plain HTTP
+POST can't authenticate. This module drives a headless Chromium browser with
+Playwright: it fills the login form, lets the site's own JS submit it, then
+scrapes recent article headlines from the listing page.
 
-This module is deliberately defensive: any failure logs a diagnostic and
-returns an empty list so the rest of the briefing still sends. The log output
-is verbose on purpose so the first real GitHub Actions run tells us exactly
-what the site returned and we can tune selectors from there.
+Credentials come from ENERGYNEWS_USERNAME / ENERGYNEWS_PASSWORD (GitHub
+secrets). On every run it writes screenshots + the listing HTML to a debug
+directory (uploaded as a workflow artifact) so the page can be inspected and
+selectors tuned. Any failure logs a diagnostic and returns [] so the rest of
+the briefing still sends.
 """
 
 import logging
@@ -17,13 +18,30 @@ import re
 from datetime import datetime, timedelta, timezone
 from urllib.parse import urljoin
 
-import requests
 from bs4 import BeautifulSoup
 
 logger = logging.getLogger(__name__)
 
-# Only include articles published within this many days (configurable).
+BASE_URL = os.environ.get("ENERGYNEWS_BASE_URL", "https://www.energynews.co.nz").rstrip("/")
+LOGIN_URL = os.environ.get("ENERGYNEWS_LOGIN_URL", f"{BASE_URL}/user/login")
+LISTING_URL = os.environ.get("ENERGYNEWS_LISTING_URL", BASE_URL)
+DEBUG_DIR = os.environ.get("ENERGYNEWS_DEBUG_DIR", "debug")
 MAX_AGE_DAYS = int(os.environ.get("ENERGYNEWS_MAX_AGE_DAYS", "7"))
+NAV_TIMEOUT_MS = 45000
+
+_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+       "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36")
+
+_USERNAME_SELECTORS = [
+    "input[name='name']", "input#edit-name",
+    "input[type='email']", "input[name='mail']",
+]
+_PASSWORD_SELECTORS = ["input[name='pass']", "input#edit-pass", "input[type='password']"]
+_SUBMIT_SELECTORS = [
+    "input#edit-submit", "#edit-submit",
+    "button[type='submit']", "input[type='submit']",
+    "button:has-text('Log in')", "button:has-text('Login')",
+]
 
 _MONTHS = {m.lower(): i for i, m in enumerate(
     ["", "January", "February", "March", "April", "May", "June", "July",
@@ -32,25 +50,20 @@ _MONTHS.update({m[:3]: i for m, i in list(_MONTHS.items()) if m})
 
 
 def _parse_date(text: str) -> datetime | None:
-    """Best-effort parse of the first date found in `text` (UTC, day-granularity)."""
     if not text:
         return None
-    # ISO first: 2026-07-12 (also matches the date part of an ISO datetime like
-    # 2026-07-12T09:30:00+12:00 — no trailing \b, which would fail before "T").
     m = re.search(r"\b(\d{4})-(\d{2})-(\d{2})(?!\d)", text)
     if m:
         try:
             return datetime(int(m[1]), int(m[2]), int(m[3]), tzinfo=timezone.utc)
         except ValueError:
             pass
-    # "12 July 2026" / "12 Jul 2026"
     m = re.search(r"\b(\d{1,2})\s+([A-Za-z]{3,9})\s+(\d{4})\b", text)
     if m and m[2].lower() in _MONTHS:
         try:
             return datetime(int(m[3]), _MONTHS[m[2].lower()], int(m[1]), tzinfo=timezone.utc)
         except ValueError:
             pass
-    # NZ day-first numeric: 12/07/2026 or 12-07-2026
     m = re.search(r"\b(\d{1,2})[/-](\d{1,2})[/-](\d{4})\b", text)
     if m:
         try:
@@ -61,9 +74,8 @@ def _parse_date(text: str) -> datetime | None:
 
 
 def _article_date(anchor) -> datetime | None:
-    """Look for a publish date on/near an article link: <time datetime> or nearby text."""
     node = anchor
-    for _ in range(4):  # walk up a few ancestors looking for date context
+    for _ in range(4):
         if node is None:
             break
         time_tag = node.find("time") if hasattr(node, "find") else None
@@ -77,83 +89,46 @@ def _article_date(anchor) -> datetime | None:
         node = getattr(node, "parent", None)
     return None
 
-BASE_URL = os.environ.get("ENERGYNEWS_BASE_URL", "https://www.energynews.co.nz").rstrip("/")
-LOGIN_URL = os.environ.get("ENERGYNEWS_LOGIN_URL", f"{BASE_URL}/user/login")
-LISTING_URL = os.environ.get("ENERGYNEWS_LISTING_URL", BASE_URL)
 
-# Realistic browser UA — the site 403s obvious bot/user-agents.
-_HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-        "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
-    ),
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-    "Accept-Language": "en-NZ,en;q=0.9",
-}
+def _fill_first(page, selectors: list[str], value: str) -> bool:
+    for sel in selectors:
+        try:
+            loc = page.locator(sel).first
+            if loc.count() > 0:
+                loc.fill(value, timeout=8000)
+                logger.info("EnergyNews: filled %s", sel)
+                return True
+        except Exception:
+            continue
+    return False
 
 
-def _login(session: requests.Session, username: str, password: str) -> bool:
-    """Perform a Drupal form login. Returns True if it looks authenticated."""
-    resp = session.get(LOGIN_URL, timeout=30)
-    resp.raise_for_status()
-    soup = BeautifulSoup(resp.text, "html.parser")
+def _click_first(page, selectors: list[str]) -> bool:
+    for sel in selectors:
+        try:
+            loc = page.locator(sel).first
+            if loc.count() > 0:
+                loc.click(timeout=8000)
+                logger.info("EnergyNews: clicked %s", sel)
+                return True
+        except Exception:
+            continue
+    return False
 
-    form = (
-        soup.find("form", id=re.compile("user-login", re.I))
-        or soup.find("form", attrs={"action": re.compile("login", re.I)})
-        or soup.find("form")
-    )
-    if form is None:
-        logger.error("EnergyNews: no login form found on %s", LOGIN_URL)
+
+def _looks_logged_in(page) -> bool:
+    if "/user/login" in page.url:
         return False
-
-    # Collect every hidden/default input the form ships with (form_build_id,
-    # form_id, op, honeypots, etc.), then overwrite the credential fields.
-    data: dict[str, str] = {}
-    for inp in form.find_all(("input", "button")):
-        name = inp.get("name")
-        if name:
-            data[name] = inp.get("value", "")
-
-    # Drupal's default field names are `name` (username) and `pass` (password).
-    data["name"] = username
-    data["pass"] = password
-
-    action = form.get("action") or LOGIN_URL
-    post_url = urljoin(LOGIN_URL, action)
-    logger.info("EnergyNews: submitting login to %s (fields: %s)",
-                post_url, ", ".join(sorted(data.keys())))
-
-    post = session.post(post_url, data=data, timeout=30)
-    post.raise_for_status()
-
-    # Signs of a successful Drupal login: a logout link, or the login form gone.
-    body = post.text.lower()
-    logged_in = ("user/logout" in body) or ("log out" in body) or ("sign out" in body)
-    if not logged_in:
-        # Drupal surfaces bad credentials as an inline error message.
-        if "unrecognized username or password" in body or "sorry, unrecognized" in body:
-            logger.error("EnergyNews: login rejected — check the ENERGYNEWS_* secrets.")
-        else:
-            logger.warning(
-                "EnergyNews: login status uncertain (no logout link found). "
-                "Landed on %s (%d chars).", post.url, len(post.text))
-    else:
-        logger.info("EnergyNews: login succeeded.")
-    return logged_in
+    body = page.content().lower()
+    return ("log out" in body) or ("logout" in body) or ("sign out" in body)
 
 
-def _extract_articles(session: requests.Session, keywords: list[str],
-                      max_items: int) -> list[dict]:
-    """Pull recent headline links from the listing page; soft-filter by keywords."""
-    resp = session.get(LISTING_URL, timeout=30)
-    resp.raise_for_status()
-    soup = BeautifulSoup(resp.text, "html.parser")
-
+def _extract_articles(html: str, keywords: list[str], max_items: int) -> list[dict]:
+    soup = BeautifulSoup(html, "html.parser")
     anchors = soup.find_all("a", href=True)
-    logger.info("EnergyNews: listing %s returned %d anchors", LISTING_URL, len(anchors))
+    logger.info("EnergyNews: listing returned %d anchors", len(anchors))
 
-    lowered_keywords = [k.lower() for k in (keywords or [])]
+    lowered = [k.lower() for k in (keywords or [])]
     cutoff = datetime.now(timezone.utc) - timedelta(days=MAX_AGE_DAYS)
     keyword_hits: list[dict] = []
     recent: list[dict] = []
@@ -164,7 +139,6 @@ def _extract_articles(session: requests.Session, keywords: list[str],
     for a in anchors:
         title = a.get_text(strip=True)
         href = a["href"]
-        # Headline-ish: reasonably long text, not a nav/footer link.
         if len(title) < 25:
             continue
         url = urljoin(BASE_URL, href)
@@ -172,9 +146,6 @@ def _extract_articles(session: requests.Session, keywords: list[str],
             continue
         seen.add(url)
 
-        # Date filter: drop anything older than the window. Fail open — if no
-        # date is detectable on the listing, keep the item (and count it, so the
-        # log tells us whether date parsing is working).
         published = _article_date(a)
         if published is not None and published < cutoff:
             dropped_old += 1
@@ -183,41 +154,85 @@ def _extract_articles(session: requests.Session, keywords: list[str],
             undated += 1
 
         item = {"title": title, "link": url, "source": "EnergyNews"}
-        if lowered_keywords and any(k in title.lower() for k in lowered_keywords):
+        if lowered and any(k in title.lower() for k in lowered):
             keyword_hits.append(item)
         else:
             recent.append(item)
 
-    # Keyword matches first (the focus topics), then fill with other recent items
-    # so Claude still sees context; Claude filters to the section focus.
     ordered = keyword_hits + recent
     logger.info(
         "EnergyNews: %d candidates within %dd (%d keyword-matched, %d undated kept, "
-        "%d dropped as older than window)",
-        len(ordered), MAX_AGE_DAYS, len(keyword_hits), undated, dropped_old)
+        "%d dropped as older)", len(ordered), MAX_AGE_DAYS, len(keyword_hits),
+        undated, dropped_old)
     return ordered[:max_items]
 
 
 def fetch_energynews(keywords: list[str] | None = None, max_items: int = 10) -> list[dict]:
-    """Log in and return recent EnergyNews headlines as briefing items.
-
-    Returns an empty list on any failure (missing creds, login blocked, site
-    change) so the briefing still sends without this section.
-    """
     username = os.environ.get("ENERGYNEWS_USERNAME")
     password = os.environ.get("ENERGYNEWS_PASSWORD")
     if not username or not password:
         logger.warning("EnergyNews: ENERGYNEWS_USERNAME/PASSWORD not set — skipping.")
         return []
 
-    session = requests.Session()
-    session.headers.update(_HEADERS)
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError:
+        logger.exception("EnergyNews: playwright not installed — skipping.")
+        return []
+
+    os.makedirs(DEBUG_DIR, exist_ok=True)
+
+    def _shot(page, name):
+        try:
+            page.screenshot(path=os.path.join(DEBUG_DIR, name), full_page=True)
+        except Exception:
+            pass
 
     try:
-        if not _login(session, username, password):
-            logger.warning("EnergyNews: proceeding without confirmed login; "
-                           "results may be limited to public content.")
-        return _extract_articles(session, keywords or [], max_items)
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True)
+            context = browser.new_context(user_agent=_UA,
+                                          viewport={"width": 1366, "height": 900})
+            page = context.new_page()
+            page.set_default_timeout(NAV_TIMEOUT_MS)
+
+            page.goto(LOGIN_URL, wait_until="domcontentloaded", timeout=NAV_TIMEOUT_MS)
+            _shot(page, "01_login.png")
+
+            got_user = _fill_first(page, _USERNAME_SELECTORS, username)
+            got_pass = _fill_first(page, _PASSWORD_SELECTORS, password)
+            if not (got_user and got_pass):
+                logger.warning("EnergyNews: could not locate login fields "
+                               "(user=%s pass=%s).", got_user, got_pass)
+
+            _click_first(page, _SUBMIT_SELECTORS)
+            try:
+                page.wait_for_load_state("networkidle", timeout=NAV_TIMEOUT_MS)
+            except Exception:
+                pass
+            _shot(page, "02_after_login.png")
+
+            if _looks_logged_in(page):
+                logger.info("EnergyNews: login succeeded (url=%s).", page.url)
+            else:
+                logger.warning("EnergyNews: login NOT confirmed — still at %s. "
+                               "Check credentials or for a CAPTCHA/bot challenge "
+                               "(see debug screenshots).", page.url)
+
+            page.goto(LISTING_URL, wait_until="networkidle", timeout=NAV_TIMEOUT_MS)
+            _shot(page, "03_listing.png")
+            html = page.content()
+            try:
+                with open(os.path.join(DEBUG_DIR, "listing.html"), "w",
+                          encoding="utf-8") as fh:
+                    fh.write(html)
+            except Exception:
+                pass
+
+            context.close()
+            browser.close()
+
+        return _extract_articles(html, keywords or [], max_items)
     except Exception:
-        logger.exception("EnergyNews: fetch failed — skipping this section.")
+        logger.exception("EnergyNews: browser fetch failed — skipping this section.")
         return []
