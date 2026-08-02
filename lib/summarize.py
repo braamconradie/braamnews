@@ -37,6 +37,17 @@ def _format_items(items: list[dict]) -> str:
     return "\n".join(lines)
 
 
+def _format_inbox_items(items: list[dict]) -> str:
+    if not items:
+        return "(no emailed articles today)"
+    blocks = []
+    for item in items:
+        title = item.get("title", "(no subject)")
+        body = (item.get("body") or "").strip()
+        blocks.append(f"--- EMAILED ARTICLE: {title} ---\n{body}")
+    return "\n\n".join(blocks)
+
+
 def _format_market_snapshot(market_data: dict) -> str:
     lines = []
     for symbol, data in (market_data.get("crypto") or {}).items():
@@ -70,6 +81,10 @@ def build_prompt(sections_config: list[dict], raw_data: dict) -> str:
             parts.append(_format_market_snapshot(data))
             parts.append("Related news items:")
             parts.append(_format_items(data.get("items", [])))
+        elif section["type"] == "inbox":
+            parts.append("Full text of articles you emailed yourself "
+                         "(summarize each into 1-2 bullets):")
+            parts.append(_format_inbox_items(data.get("items", [])))
         else:
             parts.append("News items found:")
             parts.append(_format_items(data.get("items", [])))

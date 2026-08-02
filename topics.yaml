@@ -5,6 +5,18 @@
 # type: reflection   -> a short AI-written reflection, optionally grounded in `queries` news
 
 sections:
+  - id: inbox_articles
+    title: "From Your Inbox"
+    type: inbox
+    # Reads Gmail messages you've tagged with this label, summarizes each,
+    # then removes the label so it isn't repeated. Change the label here if
+    # you use a different one.
+    gmail_label: "Briefing"
+    focus: >
+      Articles you emailed to yourself and tagged for the briefing. Summarize
+      each into 1-2 tight, factual bullets; lead the bullet with the topic so
+      it's scannable. If no articles were sent, say nothing was submitted.
+
   - id: nz_energy_market
     title: "NZ Energy Market"
     type: news
