@@ -41,7 +41,7 @@ def gather_raw_data(sections_config: list[dict]) -> dict:
             items = fetch_energynews(section.get("keywords", []))
             raw_data[section_id] = {"items": items}
         elif section_type == "inbox":
-            items = fetch_inbox(section.get("gmail_label", "Briefing"))
+            items = fetch_inbox(section.get("subject_marker", "bcdailybrief"))
             raw_data[section_id] = {"items": items}
         elif section_type == "markets":
             crypto = fetch_crypto(section.get("crypto", []))
