@@ -91,12 +91,17 @@ def _article_date(anchor) -> datetime | None:
 
 
 def _fill_first(page, selectors: list[str], value: str) -> bool:
+    # Type character-by-character (not fill()) so JS/React controlled inputs
+    # register the value in component state — otherwise the form can submit
+    # blank credentials and silently bounce back to the login page.
     for sel in selectors:
         try:
             loc = page.locator(sel).first
             if loc.count() > 0:
-                loc.fill(value, timeout=8000)
-                logger.info("EnergyNews: filled %s", sel)
+                loc.click(timeout=8000)
+                loc.fill("", timeout=8000)          # clear any existing value
+                loc.press_sequentially(value, delay=25, timeout=15000)
+                logger.info("EnergyNews: typed into %s", sel)
                 return True
         except Exception:
             continue
@@ -173,8 +178,13 @@ def _diagnose_failure(page) -> None:
                     return
         except Exception:
             continue
-    logger.info("EnergyNews: no explicit error message or CAPTCHA found after submit "
-                "(form may have silently rejected the credentials).")
+    # Last resort: dump a bounded slice of the visible page text so any error
+    # wording shows up in the log even if it's in an element we don't target.
+    try:
+        body_text = " ".join(page.locator("body").inner_text(timeout=3000).split())
+        logger.info("EnergyNews: post-submit page text (trimmed): %s", body_text[:400])
+    except Exception:
+        logger.info("EnergyNews: no explicit error message or CAPTCHA found after submit.")
 
 
 def _extract_articles(html: str, keywords: list[str], max_items: int) -> list[dict]:
